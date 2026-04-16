@@ -40,10 +40,14 @@ SHEET_CATEGORY_MAP = {
 
 
 def clean_value(val):
-    """Strip whitespace from strings; return None for empty values."""
+    """Strip whitespace and control characters from strings; return empty string for None."""
     if val is None:
         return ""
     if isinstance(val, str):
+        # Remove Unicode control characters (LTR/RTL marks, etc.)
+        val = val.replace("\u200e", "").replace("\u200f", "")
+        # Normalize newlines to semicolons (multi-value fields)
+        val = val.replace("\r\n", "; ").replace("\n", "; ").replace("\r", "; ")
         val = val.strip()
         return val if val else ""
     return val
@@ -69,23 +73,17 @@ def is_empty_row(values):
     return all(v is None or (isinstance(v, str) and v.strip() == "") for v in values)
 
 
-def is_subcategory_row(values):
-    """
-    Detect sub-category rows: S.No is None, Company Name has a value,
-    but Name, Email ID, and Mobile No. are all None.
+def get_subcategory_rows(ws):
+    """Detect sub-category rows via wide merged cell ranges (B through H or beyond).
     These are label rows like "MULTINATIONAL MULTI MODALITY COMPANIES" or
-    "CONTRAST AGENTS" that aren't actual contact entries.
+    "CONTRAST AGENTS" that span many columns but aren't actual contact entries.
     """
-    s_no, company, name, designation, email, mobile, coordinator, address = values
-    if s_no is not None:
-        return False
-    if company is None or (isinstance(company, str) and company.strip() == ""):
-        return False
-    # If there's no name, no email, and no mobile, it's likely a sub-category label
-    name_empty = name is None or (isinstance(name, str) and name.strip() == "")
-    email_empty = email is None or (isinstance(email, str) and email.strip() == "")
-    mobile_empty = mobile is None or (isinstance(mobile, str) and str(mobile).strip() == "")
-    return name_empty and email_empty and mobile_empty
+    subcategory_rows = set()
+    for mc in ws.merged_cells.ranges:
+        # Wide merges starting at/near column B, spanning 5+ columns, in data area (row >= 3)
+        if mc.min_col <= 2 and (mc.max_col - mc.min_col) >= 4 and mc.min_row >= 3:
+            subcategory_rows.add(mc.min_row)
+    return subcategory_rows
 
 
 def main():
@@ -95,6 +93,7 @@ def main():
     for sheet_name in wb.sheetnames:
         category = SHEET_CATEGORY_MAP.get(sheet_name, sheet_name)
         ws = wb[sheet_name]
+        subcategory_rows = get_subcategory_rows(ws)
 
         last_company = ""
 
@@ -108,7 +107,7 @@ def main():
             if is_empty_row(values):
                 continue
 
-            if is_subcategory_row(values):
+            if row_idx in subcategory_rows:
                 continue
 
             # Clean all values
